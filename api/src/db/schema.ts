@@ -10,6 +10,7 @@ import {
   primaryKey,
   text,
   timestamp,
+  uniqueIndex,
   uuid,
 } from "drizzle-orm/pg-core";
 
@@ -118,6 +119,9 @@ export const rides = pgTable(
     ),
     index("rides_status_pickup_area_created_at_idx").on(t.status, t.pickupAreaId, t.createdAt),
     index("rides_vehicle_id_idx").on(t.vehicleId),
+    uniqueIndex("rides_one_active_per_vehicle_idx")
+      .on(t.vehicleId)
+      .where(sql`${t.status} IN ('OPEN', 'DRIVER_ARRIVED', 'STARTED')`),
   ],
 );
 
@@ -154,6 +158,7 @@ export const rideRequests = pgTable(
       t.createdAt,
     ),
     index("ride_requests_passenger_id_idx").on(t.passengerId),
+    index("ride_requests_ride_id_idx").on(t.rideId),
   ],
 );
 

@@ -1,0 +1,2 @@
+CREATE INDEX "ride_requests_ride_id_idx" ON "ride_requests" USING btree ("ride_id");--> statement-breakpoint
+CREATE UNIQUE INDEX "rides_one_active_per_vehicle_idx" ON "rides" USING btree ("vehicle_id") WHERE "rides"."status" IN ('OPEN', 'DRIVER_ARRIVED', 'STARTED');
