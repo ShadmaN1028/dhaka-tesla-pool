@@ -1,0 +1,27 @@
+{
+  "version": "7",
+  "dialect": "postgresql",
+  "entries": [
+    {
+      "idx": 0,
+      "version": "7",
+      "when": 1790671596004,
+      "tag": "0000_users_vehicles_areas",
+      "breakpoints": true
+    },
+    {
+      "idx": 1,
+      "version": "7",
+      "when": 1790671718881,
+      "tag": "0001_rides_requests_status_events",
+      "breakpoints": true
+    },
+    {
+      "idx": 2,
+      "version": "7",
+      "when": 1790672864763,
+      "tag": "0002_ride_request_ride_idx_one_active_ride",
+      "breakpoints": true
+    }
+  ]
+}

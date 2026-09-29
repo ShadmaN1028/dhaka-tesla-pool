@@ -4,3 +4,5 @@ dist/
 .next/
 coverage/
 .DS_Store
+CLAUDE.md
+AGENTS.md
