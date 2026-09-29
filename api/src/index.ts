@@ -1,14 +1,11 @@
-import "./env";
-import express from "express";
-import cors from "cors";
-import cookieParser from "cookie-parser";
+import { app } from "./app";
+import { env } from "./env";
+import { logger } from "./logger";
 
-const app = express();
-app.use(cors({ origin: process.env.WEB_ORIGIN, credentials: true }));
-app.use(express.json());
-app.use(cookieParser());
-
-app.get("/health", (_req, res) => res.json({ status: "ok" }));
-
-const port = Number(process.env.API_PORT) || 4000;
-app.listen(port, () => console.log(`API listening on :${port}`));
+app.listen(env.API_PORT, (err?: Error) => {
+  if (err) {
+    logger.fatal({ err }, `Could not listen on :${env.API_PORT}`);
+    process.exit(1);
+  }
+  logger.info(`API listening on :${env.API_PORT}`);
+});
