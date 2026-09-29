@@ -8,6 +8,13 @@
       "when": 1790671596004,
       "tag": "0000_users_vehicles_areas",
       "breakpoints": true
+    },
+    {
+      "idx": 1,
+      "version": "7",
+      "when": 1790671718881,
+      "tag": "0001_rides_requests_status_events",
+      "breakpoints": true
     }
   ]
 }
