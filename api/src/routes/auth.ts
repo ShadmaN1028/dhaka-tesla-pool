@@ -6,6 +6,7 @@ import { endSession, startSession } from "../auth/session";
 import { db } from "../db/client";
 import { users } from "../db/schema";
 import { AppError } from "../errors";
+import { requireAuth } from "../middleware/auth";
 import { authLimiter } from "../middleware/rateLimit";
 import { validate } from "../middleware/validate";
 
@@ -61,6 +62,24 @@ authRouter.post("/login", authLimiter, validate({ body: loginBody }), async (req
 
   startSession(res, user);
   res.json({ user: publicUser(user) });
+});
+
+authRouter.get("/me", requireAuth, async (req, res) => {
+  const [user] = await db
+    .select({
+      id: users.id,
+      name: users.name,
+      email: users.email,
+      role: users.role,
+      isOnline: users.isOnline,
+    })
+    .from(users)
+    .where(eq(users.id, req.user!.id));
+  if (!user) throw new AppError(401, "UNAUTHENTICATED", "Authentication required");
+
+  res.json({
+    user: { id: user.id, name: user.name, email: user.email, role: user.role, is_online: user.isOnline },
+  });
 });
 
 authRouter.post("/logout", (_req, res) => {
