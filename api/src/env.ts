@@ -23,6 +23,16 @@ if (!cookieSameSite) {
   throw new Error(`COOKIE_SAMESITE must be lax, strict or none (got "${rawSameSite}")`);
 }
 
+// Whether to believe X-Forwarded-For: false, a hop count, true, or an address list such as "loopback"
+// (see the Express docs). Only turn it on behind a real reverse proxy (nginx, a load balancer, a CDN)
+// that sets the header; Next.js's built-in /api rewrite does not, so trusting it would let clients forge their IP.
+function parseTrustProxy(raw: string | undefined): boolean | number | string {
+  if (raw === undefined || raw === "" || raw === "false") return false;
+  if (raw === "true") return true;
+  if (/^\d+$/.test(raw)) return Number(raw);
+  return raw;
+}
+
 export const env = {
   NODE_ENV: nodeEnv,
   DATABASE_URL: databaseUrl,
@@ -31,4 +41,5 @@ export const env = {
   JWT_SECRET: jwtSecret,
   COOKIE_SAMESITE: cookieSameSite,
   COOKIE_SECURE: process.env.COOKIE_SECURE === "true",
+  TRUST_PROXY: parseTrustProxy(process.env.TRUST_PROXY),
 };

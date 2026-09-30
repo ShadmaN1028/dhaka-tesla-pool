@@ -7,7 +7,7 @@ import { db } from "../db/client";
 import { users } from "../db/schema";
 import { AppError } from "../errors";
 import { requireAuth } from "../middleware/auth";
-import { authLimiter } from "../middleware/rateLimit";
+import { loginLimiter, signupLimiter } from "../middleware/rateLimit";
 import { validate } from "../middleware/validate";
 
 const BCRYPT_ROUNDS = 10;
@@ -36,7 +36,7 @@ const publicUser = (u: Pick<typeof users.$inferSelect, "id" | "name" | "email" |
 
 export const authRouter = Router();
 
-authRouter.post("/signup", authLimiter, validate({ body: signupBody }), async (req, res) => {
+authRouter.post("/signup", signupLimiter, validate({ body: signupBody }), async (req, res) => {
   const { name, email, password } = req.body as z.infer<typeof signupBody>;
   const passwordHash = await bcrypt.hash(password, BCRYPT_ROUNDS);
 
@@ -51,7 +51,7 @@ authRouter.post("/signup", authLimiter, validate({ body: signupBody }), async (r
   res.status(201).json({ user });
 });
 
-authRouter.post("/login", authLimiter, validate({ body: loginBody }), async (req, res) => {
+authRouter.post("/login", loginLimiter, validate({ body: loginBody }), async (req, res) => {
   const { email, password } = req.body as z.infer<typeof loginBody>;
 
   const [user] = await db.select().from(users).where(eq(users.email, email));

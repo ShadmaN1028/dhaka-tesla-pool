@@ -12,6 +12,9 @@ import { requestsRouter } from "./routes/requests";
 
 export const app = express();
 
+// Off by default: see TRUST_PROXY in env.ts for when req.ip may be taken from X-Forwarded-For.
+app.set("trust proxy", env.TRUST_PROXY);
+
 app.use(httpLogger);
 app.use(helmet());
 app.use(cors({ origin: env.WEB_ORIGIN, credentials: true }));
