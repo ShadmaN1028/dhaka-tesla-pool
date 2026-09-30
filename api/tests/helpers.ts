@@ -84,3 +84,16 @@ export async function requestOf(requestId: string) {
   const [row] = await db.select().from(rideRequests).where(eq(rideRequests.id, requestId));
   return row;
 }
+
+// Resolves once some backend is blocked waiting for a row lock; used to order concurrent transactions.
+export async function waitForLockWait() {
+  for (let i = 0; i < 150; i++) {
+    const { rows } = await db.execute<{ n: number }>(
+      sql`select count(*)::int as n from pg_stat_activity
+          where datname = current_database() and wait_event_type = 'Lock'`,
+    );
+    if (rows[0].n > 0) return;
+    await new Promise((resolve) => setTimeout(resolve, 20));
+  }
+  throw new Error("waitForLockWait: nothing ever blocked on a lock");
+}

@@ -3,8 +3,17 @@ import request from "supertest";
 import { describe, expect, it } from "vitest";
 import { app } from "../src/app";
 import { db } from "../src/db/client";
-import { rideRequests, statusEvents, users } from "../src/db/schema";
-import { areaId, bulletRide, loginAs, requestOf, requestRide, rideOf, setStatus } from "./helpers";
+import { rideRequests, rides, statusEvents, users } from "../src/db/schema";
+import {
+  areaId,
+  bulletRide,
+  loginAs,
+  requestOf,
+  requestRide,
+  rideOf,
+  setStatus,
+  waitForLockWait,
+} from "./helpers";
 
 const cancel = (cookie: string, requestId: string) =>
   request(app).post(`/requests/${requestId}/cancel`).set("Cookie", cookie);
@@ -356,6 +365,78 @@ describe("POST /requests/:id/cancel", () => {
     const cancelledEvents = (await eventsOf(created.body.id)).filter((e) => e.toStatus === "CANCELLED");
     expect(cancelledEvents).toHaveLength(1);
   });
+
+  it("locks the ride before the request: against a start-style transaction (ride, then requests) it cannot deadlock", async () => {
+    const nusrat = await loginAs("nusrat");
+    const created = await requestRide(nusrat, "Banani", "Mohakhali");
+    const ride = await bulletRide(1);
+    await setStatus(created.body.id, "MATCHED", ride.id);
+
+    let rideLocked!: () => void;
+    const rideLockedP = new Promise<void>((resolve) => (rideLocked = resolve));
+    let proceed!: () => void;
+    const proceedP = new Promise<void>((resolve) => (proceed = resolve));
+
+    // Stands in for ride start, which is not built yet: lock the ride, then touch its requests.
+    const start = db.transaction(async (tx) => {
+      await tx.select({ id: rides.id }).from(rides).where(eq(rides.id, ride.id)).for("update");
+      rideLocked();
+      await proceedP;
+      await tx
+        .update(rideRequests)
+        .set({ status: "IN_PROGRESS" })
+        .where(eq(rideRequests.rideId, ride.id));
+    });
+    await rideLockedP;
+    const cancelling = cancel(nusrat, created.body.id).then((r) => r);
+    await waitForLockWait();
+    proceed();
+
+    await start; // would be aborted as a deadlock victim if cancel held the request while waiting for the ride
+    const res = await cancelling;
+
+    expect(res.status).toBe(409);
+    expect(res.body.error.message).toBe("Cannot move ride request from IN_PROGRESS to CANCELLED");
+    expect((await requestOf(created.body.id)).status).toBe("IN_PROGRESS");
+    expect((await rideOf(ride.id)).seatsOccupied).toBe(1);
+  }, 30_000);
+
+  it("a request matched while the cancel is waiting is still cancelled, releasing its seat exactly once", async () => {
+    const nusrat = await loginAs("nusrat");
+    const created = await requestRide(nusrat, "Banani", "Mohakhali");
+    const ride = await bulletRide(1);
+
+    let matchedInTx!: () => void;
+    const matchedP = new Promise<void>((resolve) => (matchedInTx = resolve));
+    let proceed!: () => void;
+    const proceedP = new Promise<void>((resolve) => (proceed = resolve));
+
+    // A driver match that is still uncommitted: the cancel reads the request as unmatched (no
+    // ride_id), then blocks on the row, then finds it MATCHED once the match commits.
+    const matching = db.transaction(async (tx) => {
+      await tx
+        .update(rideRequests)
+        .set({ status: "MATCHED", rideId: ride.id })
+        .where(eq(rideRequests.id, created.body.id));
+      matchedInTx();
+      await proceedP;
+    });
+    await matchedP;
+    const cancelling = cancel(nusrat, created.body.id).then((r) => r);
+    await waitForLockWait();
+    proceed();
+
+    await matching;
+    const res = await cancelling;
+
+    expect(res.status).toBe(200);
+    expect(res.body).toMatchObject({ status: "CANCELLED", ride_id: ride.id });
+    expect((await rideOf(ride.id)).seatsOccupied).toBe(0);
+    const events = await eventsOf(created.body.id);
+    expect(events.filter((e) => e.toStatus === "CANCELLED")).toMatchObject([
+      { fromStatus: "MATCHED", toStatus: "CANCELLED" },
+    ]);
+  }, 30_000);
 
   it("is passenger-only: Jashim gets 403, and no session gets 401", async () => {
     const created = await requestRide(await loginAs("nusrat"), "Banani", "Mohakhali");
