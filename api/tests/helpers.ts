@@ -1,9 +1,9 @@
-import { inArray, notInArray, sql } from "drizzle-orm";
+import { eq, inArray, notInArray, sql } from "drizzle-orm";
 import request from "supertest";
 import { app } from "../src/app";
 import { SESSION_COOKIE } from "../src/auth/session";
 import { db } from "../src/db/client";
-import { users } from "../src/db/schema";
+import { areas, users } from "../src/db/schema";
 import { env } from "../src/env";
 
 export type SeededUser = "jashim" | "nusrat" | "rafiq" | "shirin";
@@ -18,6 +18,12 @@ export async function resetDb() {
   const seededEmails = SEEDED_USERS.map(emailOf);
   await db.delete(users).where(notInArray(users.email, seededEmails));
   await db.update(users).set({ isOnline: false }).where(inArray(users.email, seededEmails));
+}
+
+export async function areaId(name: string): Promise<number> {
+  const [area] = await db.select({ id: areas.id }).from(areas).where(eq(areas.name, name));
+  if (!area) throw new Error(`areaId: no seeded area named ${name}`);
+  return area.id;
 }
 
 // Returns the "session=<jwt>" pair, ready for .set("Cookie", ...).
