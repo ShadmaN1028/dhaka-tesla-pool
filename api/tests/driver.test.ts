@@ -3,8 +3,17 @@ import request from "supertest";
 import { describe, expect, it } from "vitest";
 import { app } from "../src/app";
 import { db } from "../src/db/client";
-import { users } from "../src/db/schema";
-import { bulletRide, loginAs, requestRide, setStatus } from "./helpers";
+import { rides, statusEvents, users } from "../src/db/schema";
+import {
+  areaId,
+  bulletRide,
+  loginAs,
+  requestOf,
+  requestRide,
+  resetDb,
+  rideOf,
+  setStatus,
+} from "./helpers";
 
 const post = (cookie: string, path: string) => request(app).post(path).set("Cookie", cookie);
 const get = (cookie: string, path: string) => request(app).get(path).set("Cookie", cookie);
@@ -184,6 +193,180 @@ describe("GET /driver/rides", () => {
   });
 });
 
+describe("POST /driver/requests/:id/accept", () => {
+  const accept = (cookie: string, requestId: string) =>
+    post(cookie, `/driver/requests/${requestId}/accept`);
+  const allRides = () => db.select().from(rides);
+  const eventsOf = (entityId: string) =>
+    db.select().from(statusEvents).where(eq(statusEvents.entityId, entityId)).orderBy(statusEvents.id);
+
+  async function onlineJashim() {
+    const jashim = await loginAs("jashim");
+    await post(jashim, "/driver/online");
+    return jashim;
+  }
+
+  it("Jashim accepts Nusrat's request: a new OPEN ride with her seat, both status events, and she sees Jashim / Bullet", async () => {
+    const nusrat = await loginAs("nusrat");
+    const created = await requestRide(nusrat, "Banani", "Mohakhali");
+    const jashim = await onlineJashim();
+
+    const res = await accept(jashim, created.body.id);
+
+    expect(res.status).toBe(200);
+    expect(res.body).toMatchObject({
+      status: "OPEN",
+      capacity: 3,
+      seats_occupied: 1,
+      pickup_area: { name: "Banani" },
+      vehicle_name: "Bullet",
+      passengers: [
+        {
+          passenger_name: "Nusrat",
+          seats: 1,
+          destination_area: { name: "Mohakhali" },
+          status: "MATCHED",
+        },
+      ],
+    });
+    expect((await get(jashim, "/driver/ride")).body).toEqual(res.body);
+
+    const [ride] = await allRides();
+    expect(ride).toMatchObject({
+      id: res.body.id,
+      status: "OPEN",
+      capacity: 3,
+      seatsOccupied: 1,
+      pickupAreaId: await areaId("Banani"),
+    });
+    expect(await requestOf(created.body.id)).toMatchObject({ status: "MATCHED", rideId: ride.id });
+
+    const [jashimRow] = await db.select().from(users).where(eq(users.email, "jashim@teslapool.dev"));
+    expect(await eventsOf(ride.id)).toMatchObject([
+      { entityType: "RIDE", fromStatus: null, toStatus: "OPEN", actorUserId: jashimRow.id },
+    ]);
+    const requestEvents = await eventsOf(created.body.id);
+    expect(requestEvents).toHaveLength(2);
+    expect(requestEvents[1]).toMatchObject({
+      entityType: "RIDE_REQUEST",
+      fromStatus: "REQUESTED",
+      toStatus: "MATCHED",
+      actorUserId: jashimRow.id,
+    });
+
+    const seenByNusrat = await get(nusrat, `/requests/${created.body.id}`);
+    expect(seenByNusrat.body).toMatchObject({
+      status: "MATCHED",
+      ride_id: ride.id,
+      driver: { name: "Jashim", vehicle: "Bullet" },
+    });
+  });
+
+  it("is 409 DRIVER_OFFLINE while the driver is offline, and changes nothing", async () => {
+    const created = await requestRide(await loginAs("nusrat"), "Banani", "Mohakhali");
+
+    const res = await accept(await loginAs("jashim"), created.body.id);
+
+    expect(res.status).toBe(409);
+    expect(res.body.error.code).toBe("DRIVER_OFFLINE");
+    expect(await allRides()).toHaveLength(0);
+    expect((await requestOf(created.body.id)).status).toBe("REQUESTED");
+  });
+
+  it("a second accept while the ride is active is 409 VEHICLE_HAS_ACTIVE_RIDE and leaves that request REQUESTED", async () => {
+    const first = await requestRide(await loginAs("nusrat"), "Banani", "Mohakhali");
+    const second = await requestRide(await loginAs("rafiq"), "Banani", "Gulshan 1");
+    const jashim = await onlineJashim();
+    expect((await accept(jashim, first.body.id)).status).toBe(200);
+
+    const res = await accept(jashim, second.body.id);
+
+    expect(res.status).toBe(409);
+    expect(res.body.error.code).toBe("VEHICLE_HAS_ACTIVE_RIDE");
+    expect((await requestOf(second.body.id)).status).toBe("REQUESTED");
+    const [ride, ...others] = await allRides();
+    expect(others).toHaveLength(0);
+    expect(ride.seatsOccupied).toBe(1);
+  });
+
+  it("an already-cancelled request is 409 REQUEST_UNAVAILABLE and leaves no ride behind", async () => {
+    const nusrat = await loginAs("nusrat");
+    const created = await requestRide(nusrat, "Banani", "Mohakhali");
+    await post(nusrat, `/requests/${created.body.id}/cancel`);
+    const jashim = await onlineJashim();
+
+    const res = await accept(jashim, created.body.id);
+
+    expect(res.status).toBe(409);
+    expect(res.body.error.code).toBe("REQUEST_UNAVAILABLE");
+    expect(await allRides()).toHaveLength(0);
+    expect((await requestOf(created.body.id)).status).toBe("CANCELLED");
+    expect(await eventsOf(created.body.id)).toHaveLength(2);
+  });
+
+  it("a request someone else already took is 409 REQUEST_UNAVAILABLE and leaves no new ride behind", async () => {
+    const created = await requestRide(await loginAs("nusrat"), "Banani", "Mohakhali");
+    const earlierRide = await bulletRide(1, "COMPLETED");
+    await setStatus(created.body.id, "MATCHED", earlierRide.id);
+
+    const res = await accept(await onlineJashim(), created.body.id);
+
+    expect(res.status).toBe(409);
+    expect(res.body.error.code).toBe("REQUEST_UNAVAILABLE");
+    expect(await allRides()).toHaveLength(1);
+    expect(await requestOf(created.body.id)).toMatchObject({ status: "MATCHED", rideId: earlierRide.id });
+  });
+
+  it("a request for 3 seats fills Bullet exactly", async () => {
+    const created = await requestRide(await loginAs("shirin"), "Banani", "Mohakhali", 3);
+
+    const res = await accept(await onlineJashim(), created.body.id);
+
+    expect(res.status).toBe(200);
+    expect(res.body).toMatchObject({ capacity: 3, seats_occupied: 3 });
+    const [ride] = await allRides();
+    expect(await rideOf(ride.id)).toMatchObject({ capacity: 3, seatsOccupied: 3 });
+  });
+
+  it("answers 404 for a request that does not exist, and creates no ride", async () => {
+    const res = await accept(await onlineJashim(), "3f2b8c1e-6d4a-4b7e-9a10-1c2d3e4f5a6b");
+
+    expect(res.status).toBe(404);
+    expect(res.body.error.code).toBe("NOT_FOUND");
+    expect(await allRides()).toHaveLength(0);
+  });
+
+  it("accept racing with offline never leaves the driver offline with an active ride", async () => {
+    const jashim = await loginAs("jashim");
+    const nusrat = await loginAs("nusrat");
+
+    for (let round = 0; round < 20; round++) {
+      await resetDb();
+      await post(jashim, "/driver/online");
+      const created = await requestRide(nusrat, "Banani", "Mohakhali");
+
+      const [acceptRes, offlineRes] = await Promise.all([
+        accept(jashim, created.body.id),
+        post(jashim, "/driver/offline"),
+      ]);
+
+      const accepted = acceptRes.status === 200;
+      const wentOffline = offlineRes.status === 200;
+      // Exactly one of them wins; both succeeding would mean offline with an active ride.
+      expect(accepted !== wentOffline, `round ${round}: accept ${acceptRes.status}, offline ${offlineRes.status}`).toBe(true);
+      if (accepted) {
+        expect(offlineRes.body.error.code).toBe("HAS_ACTIVE_RIDE");
+        expect(await jashimIsOnline()).toBe(true);
+        expect(await allRides()).toHaveLength(1);
+      } else {
+        expect(acceptRes.body.error.code).toBe("DRIVER_OFFLINE");
+        expect(await jashimIsOnline()).toBe(false);
+        expect(await allRides()).toHaveLength(0);
+      }
+    }
+  }, 60_000);
+});
+
 describe("driver routes are driver-only", () => {
   it.each([
     ["POST", "/driver/online"],
@@ -191,6 +374,7 @@ describe("driver routes are driver-only", () => {
     ["GET", "/driver/requests"],
     ["GET", "/driver/ride"],
     ["GET", "/driver/rides"],
+    ["POST", "/driver/requests/3f2b8c1e-6d4a-4b7e-9a10-1c2d3e4f5a6b/accept"],
   ] as const)("Nusrat calling %s %s gets 403 FORBIDDEN", async (method, path) => {
     const nusrat = await loginAs("nusrat");
 
