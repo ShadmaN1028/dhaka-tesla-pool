@@ -5,6 +5,8 @@ import type { NextConfig } from "next";
 const API_URL = process.env.API_URL ?? "http://localhost:4000";
 
 const nextConfig: NextConfig = {
+  // The Docker image sets BUILD_STANDALONE=1; locally `next start` keeps working as before.
+  output: process.env.BUILD_STANDALONE === "1" ? "standalone" : undefined,
   async rewrites() {
     return [{ source: "/api/:path*", destination: `${API_URL}/:path*` }];
   },
