@@ -1,10 +1,11 @@
-import { and, desc, eq, inArray, ne, notExists, sql } from "drizzle-orm";
+import { and, desc, eq, inArray, ne, notExists, type SQL, sql } from "drizzle-orm";
 import { alias } from "drizzle-orm/pg-core";
 import { Router } from "express";
 import { z } from "zod";
 import { db } from "../db/client";
 import { areas, rideRequests, rides, statusEvents, users, vehicles } from "../db/schema";
 import { claimSeats } from "../domain/pool";
+import { arriveRide, cancelRide, completeRide, startRide } from "../domain/rideLifecycle";
 import {
   ACTIVE_RIDE_STATUSES,
   assertRequestTransition,
@@ -27,8 +28,8 @@ async function assertOnline(driverId: string, action: string) {
   if (!driver?.isOnline) throw new AppError(409, "DRIVER_OFFLINE", `Go online to ${action}`);
 }
 
-// The driver's active ride with its non-cancelled passengers, or null. Never includes fares.
-async function currentRide(driverId: string) {
+// A ride with its non-cancelled passengers, or null. Never includes fares.
+async function loadRide(where: SQL) {
   const [ride] = await db
     .select({
       id: rides.id,
@@ -42,7 +43,7 @@ async function currentRide(driverId: string) {
     .from(rides)
     .innerJoin(vehicles, eq(rides.vehicleId, vehicles.id))
     .innerJoin(pickupArea, eq(rides.pickupAreaId, pickupArea.id))
-    .where(and(eq(vehicles.driverId, driverId), inArray(rides.status, ACTIVE_RIDE_STATUSES)))
+    .where(where)
     .limit(1);
   if (!ride) return null;
 
@@ -77,6 +78,10 @@ async function currentRide(driverId: string) {
     })),
   };
 }
+
+const currentRide = (driverId: string) =>
+  loadRide(and(eq(vehicles.driverId, driverId), inArray(rides.status, ACTIVE_RIDE_STATUSES))!);
+const rideById = (rideId: string) => loadRide(eq(rides.id, rideId));
 
 export const driverRouter = Router();
 
@@ -217,6 +222,22 @@ driverRouter.post("/requests/:id/accept", validate({ params: idParams }), async 
 
 driverRouter.get("/ride", async (req, res) => {
   res.json(await currentRide(req.user!.id));
+});
+
+driverRouter.post("/ride/arrive", async (req, res) => {
+  res.json(await rideById(await arriveRide(req.user!.id)));
+});
+
+driverRouter.post("/ride/start", async (req, res) => {
+  res.json(await rideById(await startRide(req.user!.id)));
+});
+
+driverRouter.post("/ride/complete", async (req, res) => {
+  res.json(await rideById(await completeRide(req.user!.id)));
+});
+
+driverRouter.post("/ride/cancel", async (req, res) => {
+  res.json(await rideById(await cancelRide(req.user!.id)));
 });
 
 driverRouter.get("/rides", async (req, res) => {
