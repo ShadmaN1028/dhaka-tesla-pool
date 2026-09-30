@@ -238,7 +238,19 @@ Then open <http://localhost:3000> and use the quick-login buttons.
 - The browser talks to `http://localhost:3000` only. The web image was built with `API_URL=http://api:4000`, so `/api/*` reaches the API service on the compose network.
 - `docker compose down -v` removes the containers and the database volume.
 
-This is also the reproducible deployment story for now: there is no public deployment (see [known limitations](#known-limitations)).
+There is no public deployment; see [Deployment](#deployment) for why, and for how to run the project.
+
+## Deployment
+
+There is **no public deployment and no live URL.** I tried the free backend hosts available to me, Render and Hugging Face Spaces. They either required card verification or were unavailable, and the brief forbids paid infrastructure, so the project is not hosted anywhere.
+
+**Docker Compose is the reproducible deployment.** On any machine with Docker:
+
+```bash
+cp .env.example .env && docker compose up --build
+```
+
+Then open <http://localhost:3000> and use the demo quick-login buttons (Nusrat, Rafiq, Shirin and Jashim). One command starts Postgres, the API (which applies the migrations and the seed when it starts) and the web app, each waiting for the previous one's health check. This was verified from a fresh clone of the repository, including the full pooled-ride story running against the containers; the details are in [the Docker section above](#docker-the-main-way-to-run-it).
 
 ## Migrations and seed
 
@@ -415,7 +427,7 @@ The same style of test covers two simultaneous cancels of one request (one wins,
 
 ## Known limitations
 
-- **No public deployment.** The project is not hosted anywhere. Docker compose is the reproducible deployment: a clean clone runs with `docker compose up --build`, and that path was verified from a fresh clone.
+- **No public deployment.** The free backend hosts I tried (Render, Hugging Face Spaces) either required card verification or were unavailable, and the brief forbids paid infrastructure, so the project is not hosted anywhere. Docker Compose is the reproducible deployment: `cp .env.example .env && docker compose up --build`, then open <http://localhost:3000> and use the demo quick-login buttons. That path was verified from a fresh clone. See [Deployment](#deployment).
 - **One driver in the cast.** With a single vehicle, the "try the next candidate ride" part of matching (several open rides at the same pickup, oldest first) cannot be exercised by the story cast and is **untested**; the lost-race case is covered with one candidate.
 - **Drivers see requests from all areas.** `GET /driver/requests` lists every open request; drivers have no location or service area yet.
 - **Polling, not realtime.** Up to about 3 seconds of delay; no websockets or server-sent events.
