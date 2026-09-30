@@ -48,6 +48,17 @@ describe("the login rate limit", () => {
     });
   }, 30_000);
 
+  it("only counts failed attempts: 25 successful Nusrat logins in a row all succeed", async () => {
+    await withLimitersOn(async () => {
+      for (let i = 0; i < 25; i++) {
+        const res = await request(app)
+          .post("/auth/login")
+          .send({ email: "nusrat@teslapool.dev", password: "tesla1234" });
+        expect(res.status, `login ${i + 1}`).toBe(200);
+      }
+    });
+  }, 30_000);
+
   it("is not reset by a forged X-Forwarded-For while proxy headers are not trusted", async () => {
     await withLimitersOn(() =>
       withTrustProxy(false, async () => {
