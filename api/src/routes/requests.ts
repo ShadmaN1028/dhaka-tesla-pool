@@ -1,4 +1,4 @@
-import { and, desc, eq, inArray } from "drizzle-orm";
+import { and, desc, eq, inArray, sql } from "drizzle-orm";
 import { alias } from "drizzle-orm/pg-core";
 import { Router } from "express";
 import { z } from "zod";
@@ -13,6 +13,7 @@ import {
   vehicles,
 } from "../db/schema";
 import { soloFarePaisa } from "../domain/fare";
+import { assertRequestTransition, CANCELLABLE_REQUEST_STATUSES } from "../domain/stateMachine";
 import { AppError } from "../errors";
 import { requireAuth, requireRole } from "../middleware/auth";
 import { validate } from "../middleware/validate";
@@ -149,5 +150,71 @@ requestsRouter.get("/:id", validate({ params: idParams }), async (req, res) => {
   const { id } = req.params as z.infer<typeof idParams>;
   const [row] = await selectOwnRequests(req.user!.id, id);
   if (!row) throw new AppError(404, "NOT_FOUND", "Ride request not found");
+  res.json(toResponse(row));
+});
+
+requestsRouter.post("/:id/cancel", validate({ params: idParams }), async (req, res) => {
+  const { id } = req.params as z.infer<typeof idParams>;
+  const passengerId = req.user!.id;
+
+  await db.transaction(async (tx) => {
+    // One atomic conditional statement. The FOR UPDATE subquery only exists to hand back the
+    // status the request had before this update, since RETURNING alone gives the new row.
+    const previous = tx
+      .select({ id: rideRequests.id, status: rideRequests.status })
+      .from(rideRequests)
+      .where(
+        and(
+          eq(rideRequests.id, id),
+          eq(rideRequests.passengerId, passengerId),
+          inArray(rideRequests.status, CANCELLABLE_REQUEST_STATUSES),
+        ),
+      )
+      .for("update")
+      .as("previous");
+
+    const [cancelled] = await tx
+      .update(rideRequests)
+      .set({ status: "CANCELLED", updatedAt: sql`now()` })
+      .from(previous)
+      .where(eq(rideRequests.id, previous.id))
+      .returning({
+        rideId: rideRequests.rideId,
+        seats: rideRequests.seats,
+        previousStatus: previous.status,
+      });
+
+    if (!cancelled) {
+      const [current] = await tx
+        .select({ status: rideRequests.status })
+        .from(rideRequests)
+        .where(and(eq(rideRequests.id, id), eq(rideRequests.passengerId, passengerId)));
+      if (!current) throw new AppError(404, "NOT_FOUND", "Ride request not found");
+      assertRequestTransition(current.status, "CANCELLED");
+      // Unreachable: statuses only move forward, so a request that was cancellable when the
+      // update ran cannot be cancellable again now.
+      throw new Error(`Cancel matched no row for a ${current.status} request`);
+    }
+
+    if (cancelled.previousStatus === "MATCHED" && cancelled.rideId) {
+      await tx
+        .update(rides)
+        .set({
+          seatsOccupied: sql`${rides.seatsOccupied} - ${cancelled.seats}`,
+          updatedAt: sql`now()`,
+        })
+        .where(eq(rides.id, cancelled.rideId));
+    }
+
+    await tx.insert(statusEvents).values({
+      entityType: "RIDE_REQUEST",
+      entityId: id,
+      fromStatus: cancelled.previousStatus,
+      toStatus: "CANCELLED",
+      actorUserId: passengerId,
+    });
+  });
+
+  const [row] = await selectOwnRequests(passengerId, id);
   res.json(toResponse(row));
 });

@@ -13,6 +13,11 @@ const REQUEST_TRANSITIONS: Record<RideRequestStatus, readonly RideRequestStatus[
   CANCELLED: [],
 };
 
+// Derived from the transition table, so the cancellation rule is defined in one place only.
+export const CANCELLABLE_REQUEST_STATUSES = (
+  Object.keys(REQUEST_TRANSITIONS) as RideRequestStatus[]
+).filter((from) => REQUEST_TRANSITIONS[from].includes("CANCELLED"));
+
 const RIDE_TRANSITIONS: Record<RideStatus, readonly RideStatus[]> = {
   OPEN: ["DRIVER_ARRIVED", "CANCELLED"],
   DRIVER_ARRIVED: ["STARTED", "CANCELLED"],

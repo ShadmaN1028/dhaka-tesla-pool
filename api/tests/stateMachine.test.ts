@@ -3,6 +3,7 @@ import { rideRequestStatus, rideStatus } from "../src/db/schema";
 import {
   assertRequestTransition,
   assertRideTransition,
+  CANCELLABLE_REQUEST_STATUSES,
   type RideRequestStatus,
   type RideStatus,
 } from "../src/domain/stateMachine";
@@ -116,4 +117,10 @@ describeMachine<RideStatus>({
     ["STARTED", "OPEN"],
     ["OPEN", "OPEN"],
   ],
+});
+
+describe("CANCELLABLE_REQUEST_STATUSES", () => {
+  it("lists exactly the request statuses that may move to CANCELLED", () => {
+    expect(CANCELLABLE_REQUEST_STATUSES).toEqual(["REQUESTED", "MATCHED"]);
+  });
 });
