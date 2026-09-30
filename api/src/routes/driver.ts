@@ -1,0 +1,168 @@
+import { and, desc, eq, inArray, ne, notExists, sql } from "drizzle-orm";
+import { alias } from "drizzle-orm/pg-core";
+import { Router } from "express";
+import { db } from "../db/client";
+import { areas, rideRequests, rides, users, vehicles } from "../db/schema";
+import { ACTIVE_RIDE_STATUSES, FINISHED_RIDE_STATUSES } from "../domain/stateMachine";
+import { AppError } from "../errors";
+import { requireAuth, requireRole } from "../middleware/auth";
+
+const pickupArea = alias(areas, "pickup_area");
+const destinationArea = alias(areas, "destination_area");
+
+export const driverRouter = Router();
+
+driverRouter.use(requireAuth, requireRole("DRIVER"));
+
+driverRouter.post("/online", async (req, res) => {
+  await db.update(users).set({ isOnline: true }).where(eq(users.id, req.user!.id));
+  res.json({ is_online: true });
+});
+
+driverRouter.post("/offline", async (req, res) => {
+  const driverId = req.user!.id;
+  const activeRide = db
+    .select({ one: sql`1` })
+    .from(rides)
+    .innerJoin(vehicles, eq(rides.vehicleId, vehicles.id))
+    .where(and(eq(vehicles.driverId, driverId), inArray(rides.status, ACTIVE_RIDE_STATUSES)));
+
+  // One conditional statement: the flag only flips when there is no active ride.
+  const [updated] = await db
+    .update(users)
+    .set({ isOnline: false })
+    .where(and(eq(users.id, driverId), notExists(activeRide)))
+    .returning({ id: users.id });
+  if (!updated) {
+    throw new AppError(409, "HAS_ACTIVE_RIDE", "Finish or cancel your active ride before going offline");
+  }
+  res.json({ is_online: false });
+});
+
+driverRouter.get("/requests", async (req, res) => {
+  const [driver] = await db
+    .select({ isOnline: users.isOnline })
+    .from(users)
+    .where(eq(users.id, req.user!.id));
+  if (!driver?.isOnline) throw new AppError(409, "DRIVER_OFFLINE", "Go online to see ride requests");
+
+  const rows = await db
+    .select({
+      id: rideRequests.id,
+      passengerName: users.name,
+      seats: rideRequests.seats,
+      pickupAreaId: pickupArea.id,
+      pickupAreaName: pickupArea.name,
+      destinationAreaId: destinationArea.id,
+      destinationAreaName: destinationArea.name,
+      createdAt: rideRequests.createdAt,
+    })
+    .from(rideRequests)
+    .innerJoin(users, eq(rideRequests.passengerId, users.id))
+    .innerJoin(pickupArea, eq(rideRequests.pickupAreaId, pickupArea.id))
+    .innerJoin(destinationArea, eq(rideRequests.destinationAreaId, destinationArea.id))
+    .where(eq(rideRequests.status, "REQUESTED"))
+    .orderBy(rideRequests.createdAt);
+
+  res.json(
+    rows.map((r) => ({
+      id: r.id,
+      passenger_name: r.passengerName,
+      seats: r.seats,
+      pickup_area: { id: r.pickupAreaId, name: r.pickupAreaName },
+      destination_area: { id: r.destinationAreaId, name: r.destinationAreaName },
+      created_at: r.createdAt,
+    })),
+  );
+});
+
+driverRouter.get("/ride", async (req, res) => {
+  const [ride] = await db
+    .select({
+      id: rides.id,
+      status: rides.status,
+      capacity: rides.capacity,
+      seatsOccupied: rides.seatsOccupied,
+      pickupAreaId: pickupArea.id,
+      pickupAreaName: pickupArea.name,
+      vehicleName: vehicles.name,
+    })
+    .from(rides)
+    .innerJoin(vehicles, eq(rides.vehicleId, vehicles.id))
+    .innerJoin(pickupArea, eq(rides.pickupAreaId, pickupArea.id))
+    .where(and(eq(vehicles.driverId, req.user!.id), inArray(rides.status, ACTIVE_RIDE_STATUSES)))
+    .limit(1);
+  if (!ride) {
+    res.json(null);
+    return;
+  }
+
+  const passengers = await db
+    .select({
+      requestId: rideRequests.id,
+      passengerName: users.name,
+      seats: rideRequests.seats,
+      destinationAreaId: destinationArea.id,
+      destinationAreaName: destinationArea.name,
+      status: rideRequests.status,
+    })
+    .from(rideRequests)
+    .innerJoin(users, eq(rideRequests.passengerId, users.id))
+    .innerJoin(destinationArea, eq(rideRequests.destinationAreaId, destinationArea.id))
+    .where(and(eq(rideRequests.rideId, ride.id), ne(rideRequests.status, "CANCELLED")))
+    .orderBy(rideRequests.createdAt);
+
+  res.json({
+    id: ride.id,
+    status: ride.status,
+    capacity: ride.capacity,
+    seats_occupied: ride.seatsOccupied,
+    pickup_area: { id: ride.pickupAreaId, name: ride.pickupAreaName },
+    vehicle_name: ride.vehicleName,
+    passengers: passengers.map((p) => ({
+      request_id: p.requestId,
+      passenger_name: p.passengerName,
+      seats: p.seats,
+      destination_area: { id: p.destinationAreaId, name: p.destinationAreaName },
+      status: p.status,
+    })),
+  });
+});
+
+driverRouter.get("/rides", async (req, res) => {
+  const notCancelled = sql`${rideRequests.status} <> 'CANCELLED'`;
+  const rows = await db
+    .select({
+      id: rides.id,
+      status: rides.status,
+      createdAt: rides.createdAt,
+      pickupAreaId: pickupArea.id,
+      pickupAreaName: pickupArea.name,
+      vehicleName: vehicles.name,
+      passengerCount: sql<number>`count(${rideRequests.id}) filter (where ${notCancelled})`.mapWith(
+        Number,
+      ),
+      seatsUsed: sql<number>`coalesce(sum(${rideRequests.seats}) filter (where ${notCancelled}), 0)`.mapWith(
+        Number,
+      ),
+    })
+    .from(rides)
+    .innerJoin(vehicles, eq(rides.vehicleId, vehicles.id))
+    .innerJoin(pickupArea, eq(rides.pickupAreaId, pickupArea.id))
+    .leftJoin(rideRequests, eq(rideRequests.rideId, rides.id))
+    .where(and(eq(vehicles.driverId, req.user!.id), inArray(rides.status, FINISHED_RIDE_STATUSES)))
+    .groupBy(rides.id, pickupArea.id, vehicles.id)
+    .orderBy(desc(rides.createdAt));
+
+  res.json(
+    rows.map((r) => ({
+      id: r.id,
+      status: r.status,
+      pickup_area: { id: r.pickupAreaId, name: r.pickupAreaName },
+      vehicle_name: r.vehicleName,
+      passenger_count: r.passengerCount,
+      seats_used: r.seatsUsed,
+      created_at: r.createdAt,
+    })),
+  );
+});

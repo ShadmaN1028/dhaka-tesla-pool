@@ -7,6 +7,7 @@ import { httpLogger } from "./logger";
 import { errorHandler, notFound } from "./middleware/errorHandler";
 import { areasRouter } from "./routes/areas";
 import { authRouter } from "./routes/auth";
+import { driverRouter } from "./routes/driver";
 import { requestsRouter } from "./routes/requests";
 
 export const app = express();
@@ -20,6 +21,7 @@ app.use(cookieParser());
 app.get("/health", (_req, res) => res.json({ status: "ok" }));
 app.use("/auth", authRouter);
 app.use("/areas", areasRouter);
+app.use("/driver", driverRouter);
 app.use("/requests", requestsRouter);
 
 app.use(notFound);

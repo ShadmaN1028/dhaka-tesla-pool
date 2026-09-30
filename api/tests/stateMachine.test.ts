@@ -1,9 +1,11 @@
 import { describe, expect, it } from "vitest";
 import { rideRequestStatus, rideStatus } from "../src/db/schema";
 import {
+  ACTIVE_RIDE_STATUSES,
   assertRequestTransition,
   assertRideTransition,
   CANCELLABLE_REQUEST_STATUSES,
+  FINISHED_RIDE_STATUSES,
   type RideRequestStatus,
   type RideStatus,
 } from "../src/domain/stateMachine";
@@ -122,5 +124,15 @@ describeMachine<RideStatus>({
 describe("CANCELLABLE_REQUEST_STATUSES", () => {
   it("lists exactly the request statuses that may move to CANCELLED", () => {
     expect(CANCELLABLE_REQUEST_STATUSES).toEqual(["REQUESTED", "MATCHED"]);
+  });
+});
+
+describe("ride status groups", () => {
+  it("ACTIVE_RIDE_STATUSES are the statuses that can still move", () => {
+    expect(ACTIVE_RIDE_STATUSES).toEqual(["OPEN", "DRIVER_ARRIVED", "STARTED"]);
+  });
+
+  it("FINISHED_RIDE_STATUSES are the terminal statuses", () => {
+    expect(FINISHED_RIDE_STATUSES).toEqual(["COMPLETED", "CANCELLED"]);
   });
 });

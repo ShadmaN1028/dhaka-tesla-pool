@@ -3,53 +3,8 @@ import request from "supertest";
 import { describe, expect, it } from "vitest";
 import { app } from "../src/app";
 import { db } from "../src/db/client";
-import { rideRequests, rides, statusEvents, users, vehicles } from "../src/db/schema";
-import { areaId, loginAs } from "./helpers";
-
-type RequestStatus = (typeof rideRequests.$inferSelect)["status"];
-
-async function requestRide(cookie: string, pickup: string, destination: string, seats = 1) {
-  return request(app)
-    .post("/requests")
-    .set("Cookie", cookie)
-    .send({
-      pickup_area_id: await areaId(pickup),
-      destination_area_id: await areaId(destination),
-      seats,
-    });
-}
-
-// Matching is not built yet, so pool membership is set up directly in the test database.
-async function bulletRide(seatsOccupied: number) {
-  const [bullet] = await db.select().from(vehicles).where(eq(vehicles.name, "Bullet"));
-  const [ride] = await db
-    .insert(rides)
-    .values({
-      vehicleId: bullet.id,
-      pickupAreaId: await areaId("Banani"),
-      capacity: bullet.capacity,
-      seatsOccupied,
-    })
-    .returning();
-  return ride;
-}
-
-async function setStatus(requestId: string, status: RequestStatus, rideId?: string) {
-  await db
-    .update(rideRequests)
-    .set({ status, ...(rideId ? { rideId } : {}) })
-    .where(eq(rideRequests.id, requestId));
-}
-
-async function rideOf(rideId: string) {
-  const [ride] = await db.select().from(rides).where(eq(rides.id, rideId));
-  return ride;
-}
-
-async function requestOf(requestId: string) {
-  const [row] = await db.select().from(rideRequests).where(eq(rideRequests.id, requestId));
-  return row;
-}
+import { rideRequests, statusEvents, users } from "../src/db/schema";
+import { areaId, bulletRide, loginAs, requestOf, requestRide, rideOf, setStatus } from "./helpers";
 
 const cancel = (cookie: string, requestId: string) =>
   request(app).post(`/requests/${requestId}/cancel`).set("Cookie", cookie);
