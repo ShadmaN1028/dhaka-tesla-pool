@@ -4,7 +4,7 @@
 
 A ride-pooling MVP. Passengers ask for a ride between two areas of Dhaka. A driver with a Tesla (Bullet, three seats) accepts, other passengers heading out from the same area are pooled into the same car automatically, and everybody pays a discounted fare. The interesting part is not the screens, it is that the system stays correct when several people grab the last seat at the same moment.
 
-- Demo video: **TODO: add link**
+- Demo video: [watch it on Google Drive](https://drive.google.com/file/d/1hPH7zXlHSNkvcnsKhCqQ21oPuTOywFrr/view?usp=sharing)
 - Run it: `cp .env.example .env && docker compose up --build`, then open <http://localhost:3000> (see [Docker](#docker-the-main-way-to-run-it))
 
 ## Problem statement
@@ -499,4 +499,4 @@ The log also records three more decisions: a bigint identity on `status_events` 
 
 ## Demo video
 
-**TODO: add the link to the demo video here.**
+[Watch the demo video on Google Drive](https://drive.google.com/file/d/1hPH7zXlHSNkvcnsKhCqQ21oPuTOywFrr/view?usp=sharing)
