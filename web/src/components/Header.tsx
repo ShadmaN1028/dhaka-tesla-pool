@@ -21,11 +21,11 @@ export function Header({ user }: { user: { name: string; role: Role } }) {
   return (
     <header className="border-b border-zinc-200 bg-white">
       <div className="mx-auto flex max-w-3xl flex-wrap items-center justify-between gap-x-4 gap-y-2 px-4 py-3">
-        <span className="font-semibold tracking-tight">Dhaka Tesla Pool</span>
+        <span className="whitespace-nowrap font-semibold tracking-tight">Dhaka Tesla Pool</span>
         <div className="flex items-center gap-3 text-sm">
-          <span className="flex items-center gap-2">
-            <span className="font-medium">{user.name}</span>
-            <span className="rounded bg-zinc-100 px-1.5 py-0.5 text-xs font-medium uppercase tracking-wide text-zinc-600">
+          <span className="flex flex-col items-end gap-0.5 sm:flex-row sm:items-center sm:gap-2">
+            <span className="font-medium leading-tight">{user.name}</span>
+            <span className="rounded bg-zinc-100 px-1.5 py-0.5 text-[10px] font-medium uppercase leading-none tracking-wide text-zinc-600 sm:text-xs">
               {user.role}
             </span>
           </span>
