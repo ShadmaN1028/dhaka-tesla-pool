@@ -13,6 +13,7 @@ import {
   vehicles,
 } from "../db/schema";
 import { soloFarePaisa } from "../domain/fare";
+import { joinCompatibleRide } from "../domain/pool";
 import { assertRequestTransition, CANCELLABLE_REQUEST_STATUSES } from "../domain/stateMachine";
 import { AppError } from "../errors";
 import { requireAuth, requireRole } from "../middleware/auth";
@@ -115,25 +116,32 @@ requestsRouter.post("/", validate({ body: createBody }), async (req, res) => {
     throw new Error(`No area_distances row for areas ${pickupAreaId} -> ${destinationAreaId}`);
   }
 
+  // Keeps the MATCHED literal below tied to the state machine.
+  assertRequestTransition("REQUESTED", "MATCHED");
+
   const requestId = await db.transaction(async (tx) => {
+    // Pooling: claim seats on a compatible ride first (this locks the ride), then insert the
+    // request. If the one-active-request index fires, the claim rolls back with everything else.
+    const rideId = await joinCompatibleRide(tx, pickupAreaId, body.seats);
+
     const [created] = await tx
       .insert(rideRequests)
       .values({
         passengerId,
+        rideId,
         pickupAreaId,
         destinationAreaId,
         seats: body.seats,
-        status: "REQUESTED",
+        status: rideId ? "MATCHED" : "REQUESTED",
         estimatedFarePaisa: soloFarePaisa(distance.km, body.seats),
       })
       .returning({ id: rideRequests.id });
-    await tx.insert(statusEvents).values({
-      entityType: "RIDE_REQUEST",
-      entityId: created.id,
-      fromStatus: null,
-      toStatus: "REQUESTED",
-      actorUserId: passengerId,
-    });
+
+    const event = { entityType: "RIDE_REQUEST", entityId: created.id, actorUserId: passengerId } as const;
+    await tx.insert(statusEvents).values([
+      { ...event, fromStatus: null, toStatus: "REQUESTED" },
+      ...(rideId ? [{ ...event, fromStatus: "REQUESTED", toStatus: "MATCHED" } as const] : []),
+    ]);
     return created.id;
   });
 
