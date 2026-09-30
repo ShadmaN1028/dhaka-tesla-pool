@@ -1,0 +1,11 @@
+node_modules
+dist
+coverage
+tests
+.env
+.env.*
+*.log
+Dockerfile
+.dockerignore
+vitest.config.mts
+drizzle.config.ts
