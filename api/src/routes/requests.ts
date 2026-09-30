@@ -153,67 +153,99 @@ requestsRouter.get("/:id", validate({ params: idParams }), async (req, res) => {
   res.json(toResponse(row));
 });
 
+// Thrown inside the cancel transaction to roll it back and start over with the ride locked first.
+class LockOrderRetry extends Error {}
+
+// Lock order for the whole codebase: a transaction touching a ride and its requests locks the
+// ride first, then the requests.
+async function cancelOwnRequest(passengerId: string, id: string) {
+  for (let attempt = 0; attempt < 3; attempt++) {
+    try {
+      await db.transaction(async (tx) => {
+        // ride_id is only ever set once (when the request is matched), so a plain read tells us
+        // which ride to lock. If the request gets matched after this read, it is caught below.
+        const [owned] = await tx
+          .select({ rideId: rideRequests.rideId })
+          .from(rideRequests)
+          .where(and(eq(rideRequests.id, id), eq(rideRequests.passengerId, passengerId)));
+        const lockedRideId = owned?.rideId ?? null;
+        if (lockedRideId) {
+          await tx.select({ id: rides.id }).from(rides).where(eq(rides.id, lockedRideId)).for("update");
+        }
+
+        // One atomic conditional statement. The FOR UPDATE subquery only exists to hand back the
+        // status the request had before this update, since RETURNING alone gives the new row.
+        const previous = tx
+          .select({ id: rideRequests.id, status: rideRequests.status })
+          .from(rideRequests)
+          .where(
+            and(
+              eq(rideRequests.id, id),
+              eq(rideRequests.passengerId, passengerId),
+              inArray(rideRequests.status, CANCELLABLE_REQUEST_STATUSES),
+            ),
+          )
+          .for("update")
+          .as("previous");
+
+        const [cancelled] = await tx
+          .update(rideRequests)
+          .set({ status: "CANCELLED", updatedAt: sql`now()` })
+          .from(previous)
+          .where(eq(rideRequests.id, previous.id))
+          .returning({
+            rideId: rideRequests.rideId,
+            seats: rideRequests.seats,
+            previousStatus: previous.status,
+          });
+
+        if (!cancelled) {
+          const [current] = await tx
+            .select({ status: rideRequests.status })
+            .from(rideRequests)
+            .where(and(eq(rideRequests.id, id), eq(rideRequests.passengerId, passengerId)));
+          if (!current) throw new AppError(404, "NOT_FOUND", "Ride request not found");
+          assertRequestTransition(current.status, "CANCELLED");
+          // Unreachable: statuses only move forward, so a request that was cancellable when the
+          // update ran cannot be cancellable again now.
+          throw new Error(`Cancel matched no row for a ${current.status} request`);
+        }
+
+        // The request was matched between our read and the update: its row is now locked without
+        // the ride, which is the wrong order. Start over so the ride is locked first.
+        if ((cancelled.rideId ?? null) !== lockedRideId) throw new LockOrderRetry();
+
+        if (cancelled.previousStatus === "MATCHED" && cancelled.rideId) {
+          await tx
+            .update(rides)
+            .set({
+              seatsOccupied: sql`${rides.seatsOccupied} - ${cancelled.seats}`,
+              updatedAt: sql`now()`,
+            })
+            .where(eq(rides.id, cancelled.rideId));
+        }
+
+        await tx.insert(statusEvents).values({
+          entityType: "RIDE_REQUEST",
+          entityId: id,
+          fromStatus: cancelled.previousStatus,
+          toStatus: "CANCELLED",
+          actorUserId: passengerId,
+        });
+      });
+      return;
+    } catch (err) {
+      if (!(err instanceof LockOrderRetry)) throw err;
+    }
+  }
+  throw new Error(`Cancel of request ${id} kept being matched while it was locking`);
+}
+
 requestsRouter.post("/:id/cancel", validate({ params: idParams }), async (req, res) => {
   const { id } = req.params as z.infer<typeof idParams>;
   const passengerId = req.user!.id;
 
-  await db.transaction(async (tx) => {
-    // One atomic conditional statement. The FOR UPDATE subquery only exists to hand back the
-    // status the request had before this update, since RETURNING alone gives the new row.
-    const previous = tx
-      .select({ id: rideRequests.id, status: rideRequests.status })
-      .from(rideRequests)
-      .where(
-        and(
-          eq(rideRequests.id, id),
-          eq(rideRequests.passengerId, passengerId),
-          inArray(rideRequests.status, CANCELLABLE_REQUEST_STATUSES),
-        ),
-      )
-      .for("update")
-      .as("previous");
-
-    const [cancelled] = await tx
-      .update(rideRequests)
-      .set({ status: "CANCELLED", updatedAt: sql`now()` })
-      .from(previous)
-      .where(eq(rideRequests.id, previous.id))
-      .returning({
-        rideId: rideRequests.rideId,
-        seats: rideRequests.seats,
-        previousStatus: previous.status,
-      });
-
-    if (!cancelled) {
-      const [current] = await tx
-        .select({ status: rideRequests.status })
-        .from(rideRequests)
-        .where(and(eq(rideRequests.id, id), eq(rideRequests.passengerId, passengerId)));
-      if (!current) throw new AppError(404, "NOT_FOUND", "Ride request not found");
-      assertRequestTransition(current.status, "CANCELLED");
-      // Unreachable: statuses only move forward, so a request that was cancellable when the
-      // update ran cannot be cancellable again now.
-      throw new Error(`Cancel matched no row for a ${current.status} request`);
-    }
-
-    if (cancelled.previousStatus === "MATCHED" && cancelled.rideId) {
-      await tx
-        .update(rides)
-        .set({
-          seatsOccupied: sql`${rides.seatsOccupied} - ${cancelled.seats}`,
-          updatedAt: sql`now()`,
-        })
-        .where(eq(rides.id, cancelled.rideId));
-    }
-
-    await tx.insert(statusEvents).values({
-      entityType: "RIDE_REQUEST",
-      entityId: id,
-      fromStatus: cancelled.previousStatus,
-      toStatus: "CANCELLED",
-      actorUserId: passengerId,
-    });
-  });
+  await cancelOwnRequest(passengerId, id);
 
   const [row] = await selectOwnRequests(passengerId, id);
   res.json(toResponse(row));

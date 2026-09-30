@@ -26,6 +26,11 @@ const RIDE_TRANSITIONS: Record<RideStatus, readonly RideStatus[]> = {
   CANCELLED: [],
 };
 
+// Active = can still move somewhere; finished = terminal. Derived so the machine stays the only definition.
+const RIDE_STATUSES = Object.keys(RIDE_TRANSITIONS) as RideStatus[];
+export const ACTIVE_RIDE_STATUSES = RIDE_STATUSES.filter((s) => RIDE_TRANSITIONS[s].length > 0);
+export const FINISHED_RIDE_STATUSES = RIDE_STATUSES.filter((s) => RIDE_TRANSITIONS[s].length === 0);
+
 function assertTransition<S extends string>(
   transitions: Record<S, readonly S[]>,
   entity: string,
