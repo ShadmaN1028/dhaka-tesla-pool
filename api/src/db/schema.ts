@@ -159,6 +159,9 @@ export const rideRequests = pgTable(
     ),
     index("ride_requests_passenger_id_idx").on(t.passengerId),
     index("ride_requests_ride_id_idx").on(t.rideId),
+    uniqueIndex("ride_requests_one_active_per_passenger_idx")
+      .on(t.passengerId)
+      .where(sql`${t.status} IN ('REQUESTED', 'MATCHED', 'IN_PROGRESS')`),
   ],
 );
 
